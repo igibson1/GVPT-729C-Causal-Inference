@@ -1,0 +1,394 @@
+---
+title: "Problem Set 2"
+author: Isabelle Gibson
+output:
+ pdf_document: default
+---
+
+# Experiments
+
+The following field experiment studies the causal effect of providing information about corruption on voting for the incumbent. Voters were randomly assigned to receive a document with evidence that the incumbent has used public resources for personal benefit (t_ind). The experiment uses a randomized block design. The blocks are constructed using a binary indicator for having voted for the incumbent in the previous elections (block). The outcome is a binary indicator for voting for the incumbent in the next election (outcome). There is one pretreatment covariate available for the analysis (woman). Also, we have a battery of other outcomes about political attitudes that we can also be used to learn about the political effects of the treatment (outcome2 and outcome3).
+
+```{r}
+#load packages
+library(lmtest)
+library(foreign) 
+library(ggplot2)
+library(sandwich)
+library(Matrix)
+library(ri)
+library(ri2)
+library(dplyr)
+
+```
+
+```{r}
+t_ind = c(0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1)
+block = c(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1)
+outcome = c(0,0,1,0,0,0,1,0,0,0,0,0,0,0,1,0,1,1,1,0,1,0,1,0,1,0,1,0,1,0,1,0)
+woman = c(0,0,1,0,1,0,1,0,1,1,1,1,0,0,1,1,0,1,0,1,1,1,1,0,0,0,1,0,1,0,0,1)
+outcome2 = c(7,5,3,1,1,5,4,4,8,9,9,4,5,6,8,9,3,4,5,6,7,8,1,5,0,5,3,3,2,2,5,1)
+outcome3 = c(2,5,4,3,9,5,5,6,6,6,3,1,5,2,3,2,1,7,8,9,7,3,0,0,0,2,4,7,1,1,2,9)
+
+```
+
+## Question 1
+
+Compute the average treatment effect, traditional standard errors, and p-values using a regression. Interpret the results. Remember this is a blocked design.
+
+```{r Q1}
+# name the data frame 
+df <- data.frame(t_ind, block, outcome, woman, outcome2, outcome3)
+
+# regress to grab p-value, BLOCK DESIGN
+regressQ1 <- lm(outcome ~ t_ind + block, data = df)
+summary(regressQ1) 
+
+
+# standard error of t_ind from the regression
+se_t_ind <- summary(regressQ1)$coefficients["t_ind", "Std. Error"]
+se_t_ind
+
+# compute confidence interval using regression standard error
+z_value <- qnorm(0.975)  # Z-score for 95% CI
+lower_bound <- coef(regressQ1)["t_ind"] - z_value * se_t_ind
+upper_bound <- coef(regressQ1)["t_ind"] + z_value * se_t_ind
+
+# Print results
+cat("Regression ATE Estimate:", coef(regressQ1)["t_ind"], "\n")
+cat("Regression SE:", se_t_ind, "\n")
+cat("95% Confidence Interval: [", lower_bound, ",", upper_bound, "]\n")
+
+```
+
+**ANSWER:** The ATE is -0.625, p \> 3.56e-05 which means that receiving the corruption information reduces the chance of voting for the incumbent and is statistically significant.
+
+The traditional standard errors are:
+
+-   Intercept: 0.1025, p-value = 3.56e-05
+
+-   t_ind: 0.1184, p = 1.16e-05
+
+-   Block: 0.1184, p = 0.0036
+
+I created a 95% CI for t_ind to double check in results and its (-0.8569775 , -0.3930225), which doesn't include zero making it statistically significant.
+
+## Question 2
+
+Use a regression to show that the block is a prognostic covariate. Explain the results.
+
+```{r Q2}
+regressQ2 <- lm(outcome ~ block, data = df)
+summary(regressQ2)
+```
+
+**ANSWER:** The intercept coefficient 0.1875 represents the baseline probability of voting for the incumbent when in a block. The block coefficient is 0.3750 which means that voters who supported the incumbent in the previous election are 37.5 **percentage points** more likely to vote for them again. The block design is statistically significant (p \< 0.05), it is a prognostic covariate, a significant predictor of future support.
+
+## Question 3
+
+Provide a plot that compares the outcome for the treatment and control group. Do the same for the covariate. Feel free to use any plot you want.
+
+```{r Q3}
+# outcome for the treatment and control group
+ggplot(df, aes(x = factor(t_ind), y = outcome)) +
+  geom_bar(stat = "summary", fun = "mean", fill = "hotpink") +
+  labs(x = "Treatment Group (0 = Control, 1 = Treatment)", y = "Mean Outcome", title = "Outcome by Treatment Group") +
+  theme_minimal()
+
+ggplot(df, aes(x = factor(t_ind), y = woman)) +
+  geom_bar(stat = "summary", fun = "mean", fill = "purple") +
+  labs(x = "Treatment Group (0 = Control, 1 = Treatment)", y = "Proportion of Women", title = "Covariate (Woman) by Treatment Group") +
+  theme_minimal()
+
+```
+
+## Question 4
+
+Compute the Bell-McCaffrey standard errors and confidence intervals. Compare the results with question 1.
+
+```{r Q4}
+
+# define function to compute Bell-McCaffrey SEs
+BMlmSE <- function(model, clustervar=NULL, ell=NULL, IK=TRUE) {
+  X <- model.matrix(model) # extract the design matrix 
+  sum.model <- summary.lm(model) # store model summary
+  n <- sum(sum.model$df[1:2]) # observations
+  K <- model$rank # predictors 
+  XXinv <- sum.model$cov.unscaled # XX^{-1}
+  u <- residuals(model) # model residuals 
+
+# compute variance matrix using HC3 - more conservative 
+Vhat <- vcovHC(model, type="HC3")
+
+# compute standard errors 
+se <- sqrt(diag(Vhat))
+
+  return(list(vcov=Vhat, se=se))
+}
+
+# compute BMse
+bm <- BMlmSE(regressQ1)
+
+# extract robust standard errors
+bm$se
+
+# compute 95% confidence intervals using BMse
+point.estimate <- coef(regressQ1)['t_ind']
+critical.value <- qt(0.975, df = regressQ1$df.residual)  # t-distribution critical value
+margin.of.error <- critical.value * bm$se["t_ind"]
+
+ci <- c(point.estimate - margin.of.error, point.estimate + margin.of.error)
+names(ci) <- c('lower', 'upper')
+
+# print results
+cat("Bell-McCaffrey SE:", bm$se["t_ind"], "\n")
+cat("95% Confidence Interval:", ci, "\n")
+
+```
+
+**ANSWER:** The BMse adjusted SE is 0.1243294, and Q1 traditional SE was 0.1184. The BMse is slightly larger than the traditional regression, this shows that the BMse adjustment accounts for small sample bias by being more conservative. The adjustment also gives a slight shift in the 95% CI. The BMse CI is (-0.8792821 -0.3707179), while the traditional one was (-0.8569775 , -0.3930225), the BMse is slightly higher range. BMse inflates uncertainty in a smaller sample. Both methods confirm that the treatment effect (t_ind) remains statistically significant.
+
+## Question 5
+
+Use randomization inference to compute p-values. Remember that this is a blocked design.
+
+```{r Q5}
+# set seed for reproducibility
+set.seed(123)
+
+# define treatment, outcome, and blocking variable
+Z <- df$t_ind              # treatment indicator
+Y <- df$outcome            # outcome variable 
+block <- df$block          # blocking variable 
+
+# compute the exact probability of treatment assignment within each block
+probs <- genprobexact(Z, blockvar = block)
+table(probs)
+
+# estimate the Observed Average Treatment Effect (ATE)
+ate <- estate(Y, Z, prob = probs)
+cat("Observed ATE:", ate, "\n")  # Print ATE
+
+# generate simulated random treatment assignments while maintaining the block structure
+# I increased from 10000 to 50000 for precision
+perms <- genperms(Z, maxiter = 50000, blockvar = block)  
+
+# create potential outcomes under the sharp null hypothesis 
+# no treatment effect
+Ys <- genouts(Y, Z, ate = 0)
+
+# generate the null distribution of the ATE under the assumption of no treatment effect
+distout <- gendist(Ys, perms, prob = probs)
+
+# compute the two-tailed p-value for the randomization test
+p_value <- mean(abs(distout) >= abs(ate))
+cat("Randomization Inference p-value:", p_value, "\n")
+
+# visualize the null distribution of the ATE
+hist(distout, breaks = 30, col = "lightblue", main = "Null Distribution of ATE",
+     xlab = "Simulated ATE under the Null", border = "black")
+abline(v = ate, col = "red", lwd = 2, lty = 2)  # Observed ATE
+legend("topright", legend = c("Observed ATE"), col = c("red"), lwd = 2, lty = 2)
+
+# display  results of the null distribution
+dispdist(distout, ate)
+
+
+```
+
+**ANSWER:** The randomization based p-value = 1e-04, below 0.05 confidence level. This means I reject the null hypothesis that the treatment had no effect. The effect of receiving corruption information on voting behavior is real and is not due to random chance.
+
+## Question 6
+
+What is the proportion of woman voters in the treated and control group? Check if there is covariate balance for gender using both a regression and randomization inference.
+
+```{r Q6}
+women_treated <- mean(df$woman[df$t_ind == 1])
+women_control <- mean(df$woman[df$t_ind == 0])
+
+# Print results
+cat("Proportion of Women in Treatment Group:", women_treated, "\n")
+cat("Proportion of Women in Control Group:", women_control, "\n")
+
+# Run a regression to check gender balance
+# woman, female or not female voter 
+# t_ind treatment or no treatment 
+regressQ6 <- lm(woman ~ t_ind, data = df)
+
+se_robust <- vcovHC(regressQ6, type = "HC0")
+
+coeftest(regressQ6, vcov = se_robust)
+
+# randomization 
+set.seed(123)
+sims <- 10000  
+W_sims <- numeric(sims)
+
+for (i in 1:sims) {
+  Z_sim <- sample(df$t_ind) 
+  fit_sim <- lm(df$woman ~ Z_sim)
+  
+  Rbeta.hat <- coef(fit_sim)["Z_sim"]
+  RVR <- vcovHC(fit_sim, type = "HC0")["Z_sim", "Z_sim"]
+  W_sims[i] <- Rbeta.hat^2 / RVR  
+}
+
+W_obs <- coef(regressQ6)["t_ind"]^2 / vcovHC(regressQ6, type = "HC0")["t_ind", "t_ind"]
+
+p_value <- mean(W_sims >= W_obs)
+
+cat("Randomization-Based P-Value for Gender Balance:", p_value, "\n")
+```
+
+**ANSWER:**
+
+Proportion of Women in Treatment Group: 0.4375
+
+Proportion of Women in Control Group: 0.625
+
+The voters were randomly assigned to receive a document with evidence that the incumbent has used public resources for personal benefit (t_ind) p-value = 0.2879, which shows us that gender is balanced.
+
+Additionally, the randomization p-value is greater than 0.05, p = 0.4316 indicating that there is effective randomization
+
+## Question 7
+
+Compute the heterogeneous treatment effect for women voters using a regression and traditional SE. Interpret the constant, the coefficient for the treatment, and the coefficient for the interaction between the treatment and woman.
+
+```{r Q7}
+regressQ7 <- lm(outcome ~ t_ind * woman + block, data = df)
+summary(regressQ7)
+```
+
+**ANSWER:** The regression estimates whether the **effect of the corruption information on voting for the incumbent differs between women and non-women.**
+
+**Constant:** The constant **(0.40922, p = 0.01758)** represents the probability of voting for the incumbent for non-women **(women = 0)** in the control group **(no treatment, t_ind = 0)**, and in the block. Their predicted probability = 0.409 or 40.9%
+
+**Coefficient for the treatment:** The treatment effect **( -0.58085, p = 0.00357)** measures the effect of receiving the information on the voting behavior among non-women **(women = 0).** The coefficient is negative, meaning that exposure to the corruption information reduces support for the incumbent among non-women.
+
+**The coefficient for the interaction between the treatment and woman:** The interaction **t_ind:woman** **(-0.04249, p = 0.86685)** treatment effect for women is 4.25 percentages points weaker than it is for non-women. However, the p-value is high indicating that its not statistically significant. This indicates that there is no evidence that gender moderates the treatment effect, women and non-women respond similarly to the corruption information.
+
+## Question 8
+
+Estimate the average treatment effect for each block using both regressions and randomization inference. Can we obtain valid causal inference when computing the ATE within each block? Why?
+
+```{r Q8}
+
+regressQ8_b0 <- lm(outcome ~ t_ind, data = subset(df, block == 0))
+regressQ8_b1 <- lm(outcome ~ t_ind, data = subset(df, block == 1))
+
+summary(regressQ8_b0)
+summary(regressQ8_b1)
+
+# Define treatment, outcome, and blocking variable
+Z <- df$t_ind             
+Y <- df$outcome          
+block <- df$block        
+
+# Generate probability of treatment assignment within blocks
+probs <- genprobexact(Z, blockvar = block)
+table(probs)
+
+# Generate simulated random assignments
+perms <- genperms(Z, maxiter = 100000, blockvar = block)
+
+# Subset probabilities and permutations
+probs_b0 <- probs[df$block == 0]
+probs_b1 <- probs[df$block == 1]
+
+perms_b0 <- perms[, df$block == 0]
+perms_b1 <- perms[, df$block == 1]
+
+# ATE Estimation Using RI for Block = 0
+df_b0 <- subset(df, block == 0)
+ate_b0 <- estate(df_b0$outcome, df_b0$t_ind, prob = probs_b0)
+
+# ATE Estimation Using RI for Block = 1
+df_b1 <- subset(df, block == 1)
+ate_b1 <- estate(df_b1$outcome, df_b1$t_ind, prob = probs_b1)
+
+cat("ATE for Block 0 (Regression):", coef(regressQ8_b0)["t_ind"], "\n")
+cat("ATE for Block 1 (Regression):", coef(regressQ8_b1)["t_ind"], "\n")
+cat("ATE for Block 0 (Randomization Inference):", ate_b0, "\n")
+cat("ATE for Block 1 (Randomization Inference):", ate_b1, "\n")
+```
+
+**Estimate the average treatment effect for each block using both regressions and randomization inference:**
+
+ATE for Block 0 (Regression): -0.375
+
+ATE for Block 1 (Regression): -0.875
+
+ATE for Block 0 (Randomization Inference): -0.375
+
+ATE for Block 1 (Randomization Inference): -0.875
+
+**Can we obtain valid causal inference when computing the ATE within each block? Why?**: **Yes,** because the treatment was randomized in each block, making sure there are unbiased estimates. Since the comparisons are made within groups that were randomized separately, the estimated effects are not confounded by differences across the blocks. The difference in ATE between blocks suggests potential treatment effect heterogeneity.
+
+## Question 9
+
+Estimate the effect of the treatment on outcomes 2 and 3 using a regression and traditional SE. Correct for multiple comparisons.
+
+```{r Q9}
+# set seed for reproducibility
+set.seed(123)
+
+# Regressions for outcomes 2 and 3
+regressQ9_outcome2 <- lm(outcome2 ~ t_ind + block, data = df) 
+regressQ9_outcome3 <- lm(outcome3 ~ t_ind + block, data = df)
+
+# Traditional SEs
+se_outcome2 <- coeftest(regressQ9_outcome2, vcov = vcovHC(regressQ9_outcome2, type = "HC0"))
+se_outcome3 <- coeftest(regressQ9_outcome3, vcov = vcovHC(regressQ9_outcome3, type = "HC0"))
+
+# p-values for multiple comparison
+p_values <- c(se_outcome2["t_ind", 4], se_outcome3["t_ind", 4])
+
+# Alpha Level
+alpha <- 0.05
+
+# Multiple comparison
+p_bonferroni <- p.adjust(p_values, "bonferroni") < alpha
+p_holm <- p.adjust(p_values, "holm") < alpha
+p_bh <- p.adjust(p_values, "BH") < alpha
+
+# print out results
+cat("Regression Results for Outcome 2:\n")
+print(se_outcome2)
+
+cat("\nRegression Results for Outcome 3:\n")
+print(se_outcome3)
+
+cat("\nMultiple Comparisons Correction:\n")
+cat("Original p-values:", p_values, "\n")
+cat("Bonferroni-adjusted p-values:", p_bonferroni, "\n")
+cat("Holm-adjusted p-values:", p_holm, "\n")
+cat("Benjamini-Hochberg-adjusted p-values:", p_bh, "\n")
+```
+
+**ANSWER:**
+
+**Outcome 2:**
+
+The intercept **(5.3125, p = 2.108e-07)** represents the expected value of Outcome 2 for individuals in the control group **(t_ind = 0)** and the reference block. It is highly significant, indicating confidence in this baseline estimate.
+
+The treatment effect **(0.3750, p = 0.6597)** represents the change in Outcome 2 due to treatment **(t_ind = 1)**. Since the p-value is well above 0.05, the treatment does not have a statistically significant effect on Outcome 2.
+
+The block effect **(-1.7500, p = 0.0468)** is statistically significant at the 5% level, suggesting that block assignment has a meaningful impact on Outcome 2, independent of treatment.
+
+**Outcome 3:**
+
+The intercept **(3.9375, p = 7.864e-06)** represents the expected value of Outcome 3 for individuals in the control group (t_ind = 0) and the reference block. It is highly significant, indicating confidence in this baseline estimate.
+
+The treatment effect **(0.5000, p = 0.6087)** represents the change in Outcome 3 due to treatment (t_ind = 1). Since the p-value is not statistically significant (p \> 0.05), the treatment does not have a meaningful impact on Outcome 3.
+
+The block effect **(-0.3750, p = 0.7007)** is not statistically significant, suggesting that block assignment does not have a meaningful impact on Outcome 3.
+
+**Multiple Comparison Correction:**
+
+All corrections returned back as FALSE, indicating that neither result is significant after adjusting for multiple tests. This means that there is **no statistical evidence that the treatment affects either outcome.**
+
+## Question 10
+
+Let's suppose that some people moved to a new house and never got the mail with the treatment. Can you still estimate the ATE? Why?
+
+**ANSWER:** Yes, but there are limitations. If some individuals moved and don't receive the mail with the treatment, there is a non-compliance issue, someone who was assigned the treatment did not receive/undergo the treatment. This can affect how we estimate the ATE. But the assignment to treatment was still randomized, I can estimate the ITT effect, which measures the effect of being assigned to treatment, regardless of whether it was actually received. However, the ATE may be biased if non-receivers systematically differ from receivers.
